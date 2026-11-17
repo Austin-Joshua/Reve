@@ -2,8 +2,8 @@ import React, { useEffect } from "react";
 import { LandingNavbar } from "../components/landing/LandingNavbar";
 import { HeroSection } from "../components/landing/HeroSection";
 import { ShowcaseSection } from "../components/landing/ShowcaseSection";
-import { FeaturesSection } from "../components/landing/FeaturesSection";
 import { WorkflowSection } from "../components/landing/WorkflowSection";
+import { WorkspaceSection } from "../components/landing/WorkspaceSection";
 import { ArchitectureSection } from "../components/landing/ArchitectureSection";
 import { Footer } from "../components/landing/Footer";
 
@@ -17,9 +17,9 @@ export const LandingPage: React.FC = () => {
       <LandingNavbar />
       <main>
         <HeroSection />
-        <ShowcaseSection />
-        <FeaturesSection />
         <WorkflowSection />
+        <ShowcaseSection />
+        <WorkspaceSection />
         <ArchitectureSection />
       </main>
       <Footer />

@@ -1,7 +1,8 @@
 import React, { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { LandingPage } from "./pages/LandingPage";
-import { AuthPage } from "./pages/AuthPage";
+import { SignInPage } from "./pages/SignInPage";
+import { SignUpPage } from "./pages/SignUpPage";
 import { StudioPage } from "./pages/StudioPage";
 import { useAuthStore } from "./stores/authStore";
 
@@ -18,9 +19,9 @@ export function App() {
         {/* Public Landing Page */}
         <Route path="/" element={<LandingPage />} />
 
-        {/* Authentication Routes */}
-        <Route path="/login" element={<AuthPage />} />
-        <Route path="/register" element={<AuthPage />} />
+        {/* Dedicated Authentication Routes */}
+        <Route path="/login" element={<SignInPage />} />
+        <Route path="/register" element={<SignUpPage />} />
 
         {/* Authenticated Generative Studio */}
         <Route path="/studio" element={<StudioPage />} />
