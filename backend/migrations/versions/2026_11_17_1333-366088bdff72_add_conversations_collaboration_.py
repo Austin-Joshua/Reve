@@ -85,7 +85,7 @@ def upgrade() -> None:
         batch_op.create_foreign_key('fk_generations_conversation_id', 'conversations', ['conversation_id'], ['id'], ondelete='SET NULL')
 
     with op.batch_alter_table('projects', schema=None) as batch_op:
-        batch_op.add_column(sa.Column('is_archived', sa.Boolean(), server_default=sa.text('0'), nullable=False))
+        batch_op.add_column(sa.Column('is_archived', sa.Boolean(), server_default=sa.text('false'), nullable=False))
     # ### end Alembic commands ###
 
 

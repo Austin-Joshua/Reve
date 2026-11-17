@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import get_db
+from app.core.rate_limiter import enforce_rate_limit
 from app.core.security import (
     hash_password,
     verify_password,
@@ -24,8 +26,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    # Check if user already exists
+async def register(req: RegisterRequest, request: Request, db: AsyncSession = Depends(get_db)):
+    # 1. Rate limiting on registration per IP (abuse protection against automated bot signups)
+    await enforce_rate_limit(request, "register", settings.MAX_REGISTRATIONS_PER_IP_HOUR, 3600)
+
+    # 2. Check if user already exists
     result = await db.execute(select(User).where(User.email == req.email.lower()))
     if result.scalar_one_or_none():
         raise HTTPException(
@@ -47,11 +52,13 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == req.email.lower()))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(req.password, user.hashed_password):
+        # Throttle failed attempts to protect against brute-force password guessing
+        await enforce_rate_limit(request, "failed_login", 10, 900)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "AUTH_INVALID_CREDENTIALS", "message": "Invalid email or password"},

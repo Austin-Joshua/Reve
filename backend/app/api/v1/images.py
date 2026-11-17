@@ -1,12 +1,14 @@
 import os
 from pathlib import Path
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, Response, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.storage import storage_manager
+from app.core.rate_limiter import enforce_rate_limit
 from app.api.deps import get_current_user
 from app.models.entities import User, Asset
 
@@ -15,10 +17,20 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 @router.post("/upload", status_code=status.HTTP_201_CREATED)
 async def upload_image(
+    request: Request,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Enforce upload abuse rate limit per user
+    await enforce_rate_limit(
+        request,
+        "upload",
+        settings.MAX_UPLOADS_PER_USER_HOUR,
+        3600,
+        user_id=current_user.id,
+    )
+
     contents = await file.read()
 
     # Preflight image validation (magic bytes, dimensions, max size)
@@ -94,10 +106,29 @@ async def get_image_metadata(
 @router.get("/file/{filename}")
 async def serve_stored_image(filename: str):
     """
-    Direct endpoint to serve locally saved raster images for ₹0 local development.
-    Enforces strict path traversal protection using directory boundary containment.
+    Direct endpoint to serve raster images.
+    - If stored in Cloudflare R2 / S3 (public mode): redirects directly to public URL (HTTP 307).
+    - If stored in Cloudflare R2 / S3 (private mode): generates a short-lived presigned GET URL and redirects (HTTP 307).
+    - If stored locally: serves from disk with directory containment checks.
     """
     safe_name = os.path.basename(filename)
+
+    # 1. If S3 / Cloudflare R2 is configured
+    if storage_manager.is_s3_configured() or (settings.S3_PUBLIC_URL and "localhost" not in settings.S3_PUBLIC_URL):
+        if settings.S3_PUBLIC_URL:
+            return RedirectResponse(
+                url=f"{settings.S3_PUBLIC_URL.rstrip('/')}/{safe_name}",
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            )
+        # Private R2 bucket: generate short-lived presigned URL (15 minutes = 900s)
+        presigned = storage_manager.generate_presigned_url(safe_name, expires_in=900)
+        if presigned and not presigned.startswith("/api/v1/images/file"):
+            return RedirectResponse(
+                url=presigned,
+                status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            )
+
+    # 2. Local filesystem storage
     base_dir = storage_manager.local_dir.resolve()
     target_path = (storage_manager.local_dir / safe_name).resolve()
 
@@ -109,7 +140,13 @@ async def serve_stored_image(filename: str):
         )
 
     if not target_path.exists() or not target_path.is_file():
-        raise HTTPException(status_code=404, detail="Image file not found on disk")
+        # Fallback: attempt to fetch bytes from S3/R2 directly if configured
+        raw_bytes = storage_manager.get_image_bytes(safe_name)
+        if raw_bytes:
+            ext = safe_name.split(".")[-1].lower()
+            media_type = "image/png" if ext == "png" else "image/jpeg"
+            return Response(content=raw_bytes, media_type=media_type)
+        raise HTTPException(status_code=404, detail="Image file not found")
 
     ext = safe_name.split(".")[-1].lower()
     media_type = "image/png" if ext == "png" else "image/jpeg"

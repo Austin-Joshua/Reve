@@ -14,7 +14,7 @@ backend_dir = Path(__file__).resolve().parents[1]
 if str(backend_dir) not in sys.path:
     sys.path.append(str(backend_dir))
 
-from app.core.config import settings
+from app.core.config import settings, normalize_database_url
 from app.core.database import Base
 from app.models.entities import *  # Import all models for metadata detection
 
@@ -25,8 +25,8 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Set sqlalchemy.url dynamically from application settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Set sqlalchemy.url dynamically from application settings (normalized for asyncpg/sqlite)
+config.set_main_option("sqlalchemy.url", normalize_database_url(settings.DATABASE_URL))
 
 
 def run_migrations_offline() -> None:

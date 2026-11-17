@@ -9,13 +9,11 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.core.config import settings
+from app.core.config import settings, normalize_database_url
 
 
 # Normalize database URL for driver compatibility
-db_url = settings.DATABASE_URL
-if db_url.startswith("postgresql://"):
-    db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+db_url = normalize_database_url(settings.DATABASE_URL)
 
 is_sqlite = db_url.startswith("sqlite")
 

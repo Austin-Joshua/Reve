@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { BrandLogo } from "../../components/common/BrandLogo";
 import { useAuthStore } from "../../stores/authStore";
 import { useCanvasStore } from "../../stores/canvasStore";
-import { api } from "../../services/api";
+import { api, resolveImageUrl } from "../../services/api";
 import {
   Wand2,
   Image as ImageIcon,
@@ -331,7 +331,7 @@ export const StudioWorkspace: React.FC = () => {
         headers: { "Content-Type": "multipart/form-data" },
       });
       setSourceImageId(res.data.image_id);
-      setSourceImagePreview(res.data.url);
+      setSourceImagePreview(resolveImageUrl(res.data.url));
       setMode("img2img");
     } catch (err: any) {
       alert("Failed to upload image: " + (err.response?.data?.detail?.message || err.message));
@@ -419,9 +419,11 @@ export const StudioWorkspace: React.FC = () => {
   };
 
   const pollJob = (jobId: string) => {
+    let consecutiveErrors = 0;
     const interval = setInterval(async () => {
       try {
         const res = await api.get(`/jobs/${jobId}`);
+        consecutiveErrors = 0;
         const data = res.data;
         setJobStatus(data.status);
         setJobProgress(data.progress || 20);
@@ -449,11 +451,15 @@ export const StudioWorkspace: React.FC = () => {
           setJobError("Job cancelled and credits refunded.");
         }
       } catch (e: any) {
-        clearInterval(interval);
-        setJobStatus("FAILED");
-        setJobError("Lost connection to generation status endpoint.");
+        consecutiveErrors++;
+        // Allow up to 5 consecutive network blips or cold start delays before declaring failure
+        if (consecutiveErrors >= 5) {
+          clearInterval(interval);
+          setJobStatus("FAILED");
+          setJobError("Lost connection to generation status endpoint after multiple retries.");
+        }
       }
-    }, 900);
+    }, 1200);
   };
 
   const handleCancel = async () => {
@@ -492,7 +498,7 @@ export const StudioWorkspace: React.FC = () => {
   };
 
   const handleSendToImg2Img = (imgUrl: string) => {
-    setSourceImagePreview(imgUrl);
+    setSourceImagePreview(resolveImageUrl(imgUrl));
     setMode("img2img");
   };
 
@@ -507,7 +513,7 @@ export const StudioWorkspace: React.FC = () => {
       opacity: 1.0,
       zIndex: layers.length,
       transform: { x: 0, y: 0, width: 512, height: 512, rotation: 0 },
-      content: { url: activeImageResult.url },
+      content: { url: resolveImageUrl(activeImageResult.url) },
     };
     addLayer(newLayer);
     setActiveTab("layers");
@@ -882,7 +888,7 @@ export const StudioWorkspace: React.FC = () => {
                     }`}
                 >
                   <img
-                    src={activeImageResult.url}
+                    src={resolveImageUrl(activeImageResult.url)}
                     alt="Diffusion output"
                     className="w-full h-full object-contain"
                   />
@@ -913,7 +919,7 @@ export const StudioWorkspace: React.FC = () => {
                   {/* Actions */}
                   <div className="flex items-center gap-2 pl-2 border-l border-raven-700">
                     <a
-                      href={activeImageResult.url}
+                      href={resolveImageUrl(activeImageResult.url)}
                       download={`reve-${Date.now()}.png`}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -1019,7 +1025,7 @@ export const StudioWorkspace: React.FC = () => {
                 {mode === "img2img" && sourceImagePreview && (
                   <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-apricot-500/50 shrink-0 group">
                     <img
-                      src={sourceImagePreview}
+                      src={resolveImageUrl(sourceImagePreview)}
                       alt="Source"
                       className="w-full h-full object-cover"
                     />
@@ -1355,7 +1361,7 @@ export const StudioWorkspace: React.FC = () => {
                         className="relative aspect-square rounded-lg overflow-hidden bg-raven-950 cursor-pointer group"
                       >
                         <img
-                          src={item.images[0].url}
+                          src={resolveImageUrl(item.images[0].url)}
                           alt="Recent work output"
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                         />

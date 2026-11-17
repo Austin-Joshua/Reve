@@ -1,7 +1,7 @@
 import asyncio
 import json
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Header, status
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Header, status, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db, AsyncSessionLocal
 from app.core.security import decode_token
 from app.core.config import settings
+from app.core.rate_limiter import enforce_rate_limit
 from app.api.deps import get_current_user
 from app.models.entities import User, Generation, GenerationJob, GeneratedImage, Asset, Conversation, ConversationMessage
 from app.schemas.generation import (
@@ -27,9 +28,37 @@ router = APIRouter(tags=["generations"])
 async def generate_text_to_image(
     req: TextToImageRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # 0. Abuse protection: Check generation rate limit & concurrent job limit
+    await enforce_rate_limit(
+        request,
+        "generation",
+        settings.MAX_GENERATIONS_PER_USER_WINDOW,
+        settings.GENERATION_WINDOW_SECONDS,
+        user_id=current_user.id,
+    )
+
+    if settings.MAX_CONCURRENT_JOBS_PER_USER > 0:
+        active_jobs = await db.execute(
+            select(GenerationJob)
+            .join(Generation, GenerationJob.generation_id == Generation.id)
+            .where(
+                Generation.user_id == current_user.id,
+                GenerationJob.status.in_(["QUEUED", "PROCESSING"]),
+            )
+        )
+        if active_jobs.first():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "CONCURRENT_JOB_LIMIT_EXCEEDED",
+                    "message": "You already have a generation job in progress. Please wait for it to complete.",
+                },
+            )
+
     # Verify credits
     if current_user.credits_remaining < req.num_images:
         raise HTTPException(
@@ -124,9 +153,37 @@ async def generate_text_to_image(
 async def generate_image_to_image(
     req: ImageToImageRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # 0. Abuse protection: Check generation rate limit & concurrent job limit
+    await enforce_rate_limit(
+        request,
+        "generation",
+        settings.MAX_GENERATIONS_PER_USER_WINDOW,
+        settings.GENERATION_WINDOW_SECONDS,
+        user_id=current_user.id,
+    )
+
+    if settings.MAX_CONCURRENT_JOBS_PER_USER > 0:
+        active_jobs = await db.execute(
+            select(GenerationJob)
+            .join(Generation, GenerationJob.generation_id == Generation.id)
+            .where(
+                Generation.user_id == current_user.id,
+                GenerationJob.status.in_(["QUEUED", "PROCESSING"]),
+            )
+        )
+        if active_jobs.first():
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "code": "CONCURRENT_JOB_LIMIT_EXCEEDED",
+                    "message": "You already have a generation job in progress. Please wait for it to complete.",
+                },
+            )
+
     # Verify credits
     if current_user.credits_remaining < 1:
         raise HTTPException(

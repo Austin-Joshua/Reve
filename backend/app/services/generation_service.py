@@ -233,3 +233,35 @@ async def _fail_job_and_refund(session: AsyncSession, job: GenerationJob, gen: G
         session.add(fail_msg)
 
     await session.commit()
+
+
+async def recover_stale_generation_jobs(session: Optional[AsyncSession] = None) -> int:
+    """
+    Scans database on server startup for generation jobs left in QUEUED or PROCESSING
+    due to a previous process crash or Render server restart.
+    Marks them as FAILED and idempotently refunds the user's reserved credits.
+    Returns the count of recovered jobs.
+    """
+    if session is not None:
+        return await _recover_stale_in_session(session)
+    async with AsyncSessionLocal() as db_session:
+        return await _recover_stale_in_session(db_session)
+
+
+async def _recover_stale_in_session(session: AsyncSession) -> int:
+    result = await session.execute(
+        select(GenerationJob, Generation)
+        .join(Generation, GenerationJob.generation_id == Generation.id)
+        .where(GenerationJob.status.in_(["QUEUED", "PROCESSING"]))
+    )
+    stale_rows = result.all()
+    recovered_count = 0
+    for job, gen in stale_rows:
+        await _fail_job_and_refund(
+            session,
+            job,
+            gen,
+            "Generation cancelled due to server restart. Reserved credits have been refunded.",
+        )
+        recovered_count += 1
+    return recovered_count

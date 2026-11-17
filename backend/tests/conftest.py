@@ -5,6 +5,7 @@ import httpx
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.core.database import Base, get_db
+from app.core.rate_limiter import rate_limiter
 from app.main import app
 
 # Use in-memory SQLite for test isolation
@@ -33,6 +34,8 @@ async def test_db():
 
 @pytest_asyncio.fixture(scope="function")
 async def client(test_db: AsyncSession) -> AsyncGenerator[httpx.AsyncClient, None]:
+    rate_limiter.reset()
+
     async def override_get_db():
         yield test_db
 
@@ -43,3 +46,4 @@ async def client(test_db: AsyncSession) -> AsyncGenerator[httpx.AsyncClient, Non
         yield c
 
     app.dependency_overrides.clear()
+    rate_limiter.reset()

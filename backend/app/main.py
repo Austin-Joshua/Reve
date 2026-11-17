@@ -14,6 +14,7 @@ if ai_engine_path not in sys.path:
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api.v1 import api_v1_router
+from app.services.generation_service import recover_stale_generation_jobs
 
 
 @asynccontextmanager
@@ -21,6 +22,15 @@ async def lifespan(app: FastAPI):
     # Initialize DB tables (for dev SQLite or until Alembic runs)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Clean up and idempotently refund any orphaned jobs left by previous server crash/restart
+    try:
+        recovered = await recover_stale_generation_jobs()
+        if recovered > 0:
+            print(f"[Lifespan] Recovered {recovered} stale generation jobs from previous process.")
+    except Exception as e:
+        print(f"[Lifespan] Stale job recovery notice: {e}")
+
     yield
     await engine.dispose()
 

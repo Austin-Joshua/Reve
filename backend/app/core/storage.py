@@ -27,6 +27,16 @@ class StorageManager:
         self.local_dir = Path(__file__).resolve().parents[2] / "uploads"
         self.local_dir.mkdir(parents=True, exist_ok=True)
 
+    def is_s3_configured(self) -> bool:
+        """Returns True if S3 / Cloudflare R2 credentials and bucket are configured."""
+        return bool(
+            self.endpoint_url
+            and self.bucket
+            and self.access_key
+            and self.secret_key
+            and self.access_key != "minioadmin"
+        )
+
     def health_check(self) -> Dict[str, Any]:
         try:
             import boto3
@@ -119,36 +129,44 @@ class StorageManager:
             thumb.save(thumb_buf, format=img.format or "PNG")
             thumb_bytes = thumb_buf.getvalue()
 
-        # Try S3 first
+        # Try S3/R2 first if configured
         s3_ok = False
-        try:
-            import boto3
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=self.endpoint_url,
-                aws_access_key_id=self.access_key,
-                aws_secret_access_key=self.secret_key,
-                region_name=self.region,
-            )
-            s3.put_object(
-                Bucket=self.bucket,
-                Key=name,
-                Body=image_bytes,
-                ContentType=mime_type,
-            )
-            s3.put_object(
-                Bucket=self.bucket,
-                Key=thumb_name,
-                Body=thumb_bytes,
-                ContentType=mime_type,
-            )
-            s3_ok = True
-        except Exception:
-            s3_ok = False
+        if self.is_s3_configured():
+            try:
+                import boto3
+                from botocore.config import Config
+                s3 = boto3.client(
+                    "s3",
+                    endpoint_url=self.endpoint_url,
+                    aws_access_key_id=self.access_key,
+                    aws_secret_access_key=self.secret_key,
+                    region_name=self.region,
+                    config=Config(connect_timeout=3, read_timeout=10, retries={"max_attempts": 1}),
+                )
+                s3.put_object(
+                    Bucket=self.bucket,
+                    Key=name,
+                    Body=image_bytes,
+                    ContentType=mime_type,
+                )
+                s3.put_object(
+                    Bucket=self.bucket,
+                    Key=thumb_name,
+                    Body=thumb_bytes,
+                    ContentType=mime_type,
+                )
+                s3_ok = True
+            except Exception:
+                s3_ok = False
 
         if s3_ok:
-            storage_url = self.generate_presigned_url(name)
-            thumbnail_url = self.generate_presigned_url(thumb_name)
+            if settings.S3_PUBLIC_URL:
+                storage_url = f"{settings.S3_PUBLIC_URL.rstrip('/')}/{name}"
+                thumbnail_url = f"{settings.S3_PUBLIC_URL.rstrip('/')}/{thumb_name}"
+            else:
+                # Private bucket mode: store persistent endpoint path in DB rather than a temporary presigned URL
+                storage_url = f"/api/v1/images/file/{name}"
+                thumbnail_url = f"/api/v1/images/file/{thumb_name}"
         else:
             # Local filesystem save
             main_path = self.local_dir / name

@@ -1,9 +1,36 @@
 import axios from "axios";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
+
+/**
+ * Resolves relative backend asset and image paths (e.g. "/api/v1/images/file/...")
+ * against the configured backend origin, preserving absolute URLs, data URIs, and blob URIs.
+ */
+export const resolveImageUrl = (url?: string): string => {
+  if (!url) return "";
+  if (
+    url.startsWith("http://") ||
+    url.startsWith("https://") ||
+    url.startsWith("data:") ||
+    url.startsWith("blob:")
+  ) {
+    return url;
+  }
+  if (API_BASE_URL.startsWith("http://") || API_BASE_URL.startsWith("https://")) {
+    try {
+      const origin = new URL(API_BASE_URL).origin;
+      const cleanPath = url.startsWith("/") ? url : `/${url}`;
+      return `${origin}${cleanPath}`;
+    } catch {
+      return url;
+    }
+  }
+  return url;
+};
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
+  timeout: 90000, // 90s timeout to gracefully accommodate Render free-tier cold starts
   headers: {
     "Content-Type": "application/json",
   },
