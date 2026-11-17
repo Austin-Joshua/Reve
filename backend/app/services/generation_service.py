@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
 from app.core.storage import storage_manager
 from app.core.config import settings
-from app.models.entities import Generation, GenerationJob, GeneratedImage, User, Asset
+from app.models.entities import Generation, GenerationJob, GeneratedImage, User, Asset, ConversationMessage, UsageRecord
 from ai_engine.providers.registry import ProviderRegistry
 from ai_engine.pipelines.schemas import GenerationRequest, Img2ImgRequest
 
@@ -169,6 +169,38 @@ async def execute_generation_job(job_id: str):
         job.execution_time_seconds = duration
         gen.status = "COMPLETED"
 
+        # Record assistant outcome message in conversation
+        if gen.conversation_id:
+            assistant_msg = ConversationMessage(
+                conversation_id=gen.conversation_id,
+                role="assistant",
+                content=f"Generated image output in {duration}s for prompt: \"{gen.prompt}\"",
+                generation_id=gen.id,
+                metadata_json={
+                    "status": "COMPLETED",
+                    "model_id": gen.model_id,
+                    "seed": gen.seed,
+                    "images_count": len(inference_result.images),
+                    "execution_time_seconds": duration,
+                },
+            )
+            session.add(assistant_msg)
+
+        # Record usage analytics
+        credits_used = gen.parameters.get("num_images", 1)
+        usage = UsageRecord(
+            user_id=gen.user_id,
+            operation=gen.generation_type,
+            credits_consumed=credits_used,
+            details={
+                "generation_id": gen.id,
+                "model_id": gen.model_id,
+                "status": "COMPLETED",
+                "execution_time_seconds": duration,
+            },
+        )
+        session.add(usage)
+
         await session.commit()
 
 
@@ -188,4 +220,16 @@ async def _fail_job_and_refund(session: AsyncSession, job: GenerationJob, gen: G
     job.stage = "failed"
     job.error_message = error_msg
     gen.status = "FAILED"
+
+    # Record failure message in conversation if active
+    if gen.conversation_id:
+        fail_msg = ConversationMessage(
+            conversation_id=gen.conversation_id,
+            role="assistant",
+            content=f"Generation failed: {error_msg}",
+            generation_id=gen.id,
+            metadata_json={"status": "FAILED", "error": error_msg},
+        )
+        session.add(fail_msg)
+
     await session.commit()

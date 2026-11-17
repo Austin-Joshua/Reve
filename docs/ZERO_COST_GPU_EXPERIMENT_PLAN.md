@@ -117,7 +117,7 @@ vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
 print(f"[Worker] Initialized on GPU: {gpu_name} ({vram_total:.1f} GB VRAM)")
 
 # 3. Model Pipeline Initialization (Baseline: SD-1.5 / Schnell)
-from diffusers import StableDiffusionPipeline, FluxPipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline
 
 print("[Worker] Loading baseline model: runwayml/stable-diffusion-v1-5 ...")
 pipeline = StableDiffusionPipeline.from_pretrained(
@@ -126,8 +126,11 @@ pipeline = StableDiffusionPipeline.from_pretrained(
     safety_checker=None,
 ).to("cuda")
 pipeline.enable_attention_slicing()
+
+# Share components with Img2Img pipeline without duplicating VRAM
+img2img_pipe = StableDiffusionImg2ImgPipeline(**pipeline.components)
 loaded_models = ["runwayml/stable-diffusion-v1-5", "SD-1.5"]
-print("[Worker] Model ready.")
+print("[Worker] Text-to-Image & Image-to-Image models ready.")
 
 # 4. Main Polling Loop
 def send_heartbeat():
@@ -156,24 +159,47 @@ while True:
         send_heartbeat()
         last_heartbeat = now
 
+    job_id = None
     try:
         resp = requests.get(f"{BACKEND_URL}/api/v1/internal/worker/jobs/poll", headers=HEADERS, timeout=10)
         if resp.status_code == 200 and resp.json():
             job = resp.json()
             job_id = job["job_id"]
             prompt = job["prompt"]
-            print(f"[Worker] Executing job {job_id}: '{prompt[:40]}...'")
+            operation = job.get("operation", "text_to_image")
+            print(f"[Worker] Executing {operation} job {job_id}: '{prompt[:40]}...'")
+
+            # Setup seed & reproducible PyTorch generator
+            raw_seed = job.get("seed")
+            actual_seed = raw_seed if raw_seed is not None else int(torch.randint(0, 2147483647, (1,)).item())
+            generator = torch.Generator("cuda").manual_seed(actual_seed)
 
             t0 = time.time()
             with torch.inference_mode():
-                out = pipeline(
-                    prompt=prompt,
-                    negative_prompt=job.get("negative_prompt"),
-                    num_inference_steps=job.get("steps", 25),
-                    guidance_scale=job.get("cfg_scale", 7.0),
-                    width=job.get("width", 512),
-                    height=job.get("height", 512),
-                )
+                if operation == "image_to_image" and job.get("source_image_base64"):
+                    raw_source = base64.b64decode(job["source_image_base64"])
+                    init_image = Image.open(io.BytesIO(raw_source)).convert("RGB").resize(
+                        (job.get("width", 512), job.get("height", 512))
+                    )
+                    out = img2img_pipe(
+                        prompt=prompt,
+                        image=init_image,
+                        strength=job.get("strength", 0.75),
+                        negative_prompt=job.get("negative_prompt"),
+                        num_inference_steps=job.get("steps", 25),
+                        guidance_scale=job.get("cfg_scale", 7.0),
+                        generator=generator,
+                    )
+                else:
+                    out = pipeline(
+                        prompt=prompt,
+                        negative_prompt=job.get("negative_prompt"),
+                        num_inference_steps=job.get("steps", 25),
+                        guidance_scale=job.get("cfg_scale", 7.0),
+                        width=job.get("width", 512),
+                        height=job.get("height", 512),
+                        generator=generator,
+                    )
             gen_image = out.images[0]
             elapsed = time.time() - t0
 
@@ -182,12 +208,12 @@ while True:
             gen_image.save(buf, format="PNG")
             img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-            # Submit completed job
+            # Submit completed job with verified seed
             complete_payload = {
                 "job_id": job_id,
                 "status": "SUCCESS",
                 "images_base64": [img_b64],
-                "seed": job.get("seed", 42),
+                "seed": actual_seed,
                 "model_id": job.get("model_id", "SD-1.5"),
                 "execution_time_seconds": round(elapsed, 2),
             }
@@ -197,9 +223,22 @@ while True:
                 headers=HEADERS,
                 timeout=30,
             )
-            print(f"[Worker] Job {job_id} completed in {elapsed:.2f}s.")
+            print(f"[Worker] Job {job_id} completed in {elapsed:.2f}s with seed {actual_seed}.")
     except Exception as err:
-        print(f"[Worker] Polling loop error: {err}")
+        print(f"[Worker] Inference error: {err}")
+        if "out of memory" in str(err).lower():
+            torch.cuda.empty_cache()
+        if job_id:
+            try:
+                requests.post(
+                    f"{BACKEND_URL}/api/v1/internal/worker/jobs/{job_id}/fail",
+                    json={"error_message": str(err)[:1024]},
+                    headers=HEADERS,
+                    timeout=10,
+                )
+                print(f"[Worker] Reported failure for job {job_id} to backend.")
+            except Exception as post_err:
+                print(f"[Worker] Failed to report failure: {post_err}")
 
     time.sleep(2)
 ```

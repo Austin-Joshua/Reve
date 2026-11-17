@@ -81,7 +81,7 @@ class RemoteInferenceResponse(BaseModel):
     job_id: str
     status: str  # SUCCESS, FAILED, TIMEOUT
     images_base64: List[str] = Field(default_factory=list)
-    seed: int = 42
+    seed: Optional[int] = 42
     model_id: str = "SD-1.5"
     execution_time_seconds: float = 0.0
     error_message: Optional[str] = None
@@ -273,7 +273,8 @@ class RemoteWorkerProvider(BaseImageProvider):
             raise ValueError("Worker response contains no generated images.")
 
         # Validate image payloads before accepting
-        self._validate_and_decode_images(response.images_base64, seed=response.seed)
+        effective_seed = response.seed if response.seed is not None else 42
+        self._validate_and_decode_images(response.images_base64, seed=effective_seed)
 
         self._job_results[job_id] = response
         self._job_status[job_id] = "COMPLETED"
@@ -327,7 +328,7 @@ class RemoteWorkerProvider(BaseImageProvider):
         images_b64: List[str],
         expected_width: Optional[int] = None,
         expected_height: Optional[int] = None,
-        seed: int = 42,
+        seed: Optional[int] = 42,
     ) -> List[GeneratedImagePayload]:
         """Validates raster image integrity, format, dimensions, and payload size ceiling."""
         payloads: List[GeneratedImagePayload] = []
@@ -426,11 +427,12 @@ class RemoteWorkerProvider(BaseImageProvider):
 
         if status == "COMPLETED":
             res = self._job_results[job_id]
+            resolved_seed = res.seed if res.seed is not None else (remote_req.seed or 42)
             image_payloads = self._validate_and_decode_images(
                 res.images_base64,
                 expected_width=request.width,
                 expected_height=request.height,
-                seed=res.seed,
+                seed=resolved_seed,
             )
             self._cleanup_job(job_id)
             return GenerationResult(
@@ -438,7 +440,7 @@ class RemoteWorkerProvider(BaseImageProvider):
                 provider_name=self.provider_name,
                 model_id=request.model_id,
                 execution_time_seconds=round(time.time() - start_time, 2),
-                seed=res.seed,
+                seed=resolved_seed,
                 metadata=res.metadata,
             )
 
@@ -494,9 +496,10 @@ class RemoteWorkerProvider(BaseImageProvider):
 
         if status == "COMPLETED":
             res = self._job_results[job_id]
+            resolved_seed = res.seed if res.seed is not None else (remote_req.seed or 42)
             image_payloads = self._validate_and_decode_images(
                 res.images_base64,
-                seed=res.seed,
+                seed=resolved_seed,
             )
             self._cleanup_job(job_id)
             return GenerationResult(
@@ -504,7 +507,7 @@ class RemoteWorkerProvider(BaseImageProvider):
                 provider_name=self.provider_name,
                 model_id=request.model_id,
                 execution_time_seconds=round(time.time() - start_time, 2),
-                seed=res.seed,
+                seed=resolved_seed,
                 metadata=res.metadata,
             )
 

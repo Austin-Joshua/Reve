@@ -94,7 +94,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: reve_celery_worker
-    command: celery -A app.worker.celery_app worker -Q generation,editing,segmentation,postprocessing -c 1 --loglevel=info
+    command: celery -A app.workers.celery_app worker -Q generation,editing,segmentation,postprocessing -c 1 --loglevel=info
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-reve}:${POSTGRES_PASSWORD:-reve_password}@db:5432/${POSTGRES_DB:-reve_db}
       REDIS_URL: redis://redis:6379/0

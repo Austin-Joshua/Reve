@@ -11,7 +11,7 @@ from app.core.database import get_db, AsyncSessionLocal
 from app.core.security import decode_token
 from app.core.config import settings
 from app.api.deps import get_current_user
-from app.models.entities import User, Generation, GenerationJob, GeneratedImage, Asset
+from app.models.entities import User, Generation, GenerationJob, GeneratedImage, Asset, Conversation, ConversationMessage
 from app.schemas.generation import (
     TextToImageRequest,
     ImageToImageRequest,
@@ -44,10 +44,25 @@ async def generate_text_to_image(
             detail={"code": "INVALID_DIMENSIONS", "message": "Width and height must be multiples of 8."},
         )
 
+    # Validate conversation if provided
+    if req.conversation_id:
+        conv_res = await db.execute(
+            select(Conversation).where(
+                Conversation.id == req.conversation_id,
+                Conversation.user_id == current_user.id,
+            )
+        )
+        if not conv_res.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CONVERSATION_NOT_FOUND", "message": "Conversation not found or access denied."},
+            )
+
     # Create Generation entity
     generation = Generation(
         user_id=current_user.id,
         project_id=req.project_id,
+        conversation_id=req.conversation_id,
         generation_type="text_to_image",
         prompt=req.prompt,
         negative_prompt=req.negative_prompt,
@@ -67,6 +82,16 @@ async def generate_text_to_image(
     )
     db.add(generation)
     await db.flush()
+
+    # Automatically save user prompt in conversation if conversation active
+    if req.conversation_id:
+        user_msg = ConversationMessage(
+            conversation_id=req.conversation_id,
+            role="user",
+            content=req.prompt,
+            metadata_json={"generation_type": "text_to_image", "generation_id": generation.id},
+        )
+        db.add(user_msg)
 
     job = GenerationJob(
         generation_id=generation.id,
@@ -120,10 +145,25 @@ async def generate_image_to_image(
             detail={"code": "SOURCE_IMAGE_NOT_FOUND", "message": "Source image asset not found or access denied."},
         )
 
+    # Validate conversation if provided
+    if req.conversation_id:
+        conv_res = await db.execute(
+            select(Conversation).where(
+                Conversation.id == req.conversation_id,
+                Conversation.user_id == current_user.id,
+            )
+        )
+        if not conv_res.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "CONVERSATION_NOT_FOUND", "message": "Conversation not found or access denied."},
+            )
+
     # Create Generation entity
     generation = Generation(
         user_id=current_user.id,
         project_id=req.project_id,
+        conversation_id=req.conversation_id,
         generation_type="image_to_image",
         source_image_id=req.source_image_id,
         prompt=req.prompt,
@@ -142,6 +182,15 @@ async def generate_image_to_image(
     )
     db.add(generation)
     await db.flush()
+
+    if req.conversation_id:
+        user_msg = ConversationMessage(
+            conversation_id=req.conversation_id,
+            role="user",
+            content=req.prompt,
+            metadata_json={"generation_type": "image_to_image", "generation_id": generation.id},
+        )
+        db.add(user_msg)
 
     job = GenerationJob(
         generation_id=generation.id,

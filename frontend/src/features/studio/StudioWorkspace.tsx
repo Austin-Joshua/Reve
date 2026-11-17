@@ -36,7 +36,17 @@ import {
   X,
   ExternalLink,
   ChevronUp,
+  BarChart2,
+  MessageSquare,
+  Share2,
+  Bell,
+  Folder,
 } from "lucide-react";
+
+import { ConversationsDrawer } from "../conversations/ConversationsDrawer";
+import { ProjectSwitcherModal, ProjectItem } from "../projects/ProjectSwitcherModal";
+import { ShareModal } from "../collaboration/ShareModal";
+import { InvitationsInboxModal } from "../collaboration/InvitationsInboxModal";
 
 interface GenerationRecord {
   id: string;
@@ -66,7 +76,7 @@ export const StudioWorkspace: React.FC = () => {
   const { layers, addLayer } = useCanvasStore();
 
   // Active View Tab
-  const [activeTab, setActiveTab] = useState<"generate" | "layers" | "history">("generate");
+  const [activeTab, setActiveTab] = useState<"generate" | "conversations" | "layers" | "history">("generate");
   const [mode, setMode] = useState<"text2img" | "img2img">("text2img");
 
   // Core Generation Parameters
@@ -120,6 +130,24 @@ export const StudioWorkspace: React.FC = () => {
   const [projectName, setProjectName] = useState("Untitled Project");
   const [isEditingProjectName, setIsEditingProjectName] = useState(false);
 
+  // Active Persistent Workspace & Conversation State
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<"OWNER" | "EDITOR" | "VIEWER">("OWNER");
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [invitationsModalOpen, setInvitationsModalOpen] = useState(false);
+  const [pendingInvitationsCount, setPendingInvitationsCount] = useState(0);
+
+  // Scene Auto-save State
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const saveTimerRef = useRef<any>(null);
+
+  // User Analytics Modal State
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [analyticsData, setAnalyticsData] = useState<any | null>(null);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const promptInputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -127,9 +155,116 @@ export const StudioWorkspace: React.FC = () => {
     fetchUser();
     fetchHistory();
     checkWorkerHealth();
-    const interval = setInterval(checkWorkerHealth, 15000);
+    initConversationAndProject();
+    const interval = setInterval(() => {
+      checkWorkerHealth();
+      fetchPendingInvitationsCount();
+    }, 15000);
     return () => clearInterval(interval);
   }, []);
+
+  const loadProjectScene = async (projectId: string) => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    try {
+      const res = await api.get(`/projects/${projectId}/scene`);
+      if (res.data?.layers_data) {
+        useCanvasStore.getState().setLayers(res.data.layers_data);
+      }
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("idle");
+    }
+  };
+
+  const scheduleSaveScene = (newLayers: any[]) => {
+    if (!activeProjectId || currentUserRole === "VIEWER") return;
+    setSaveStatus("saving");
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await api.put(`/projects/${activeProjectId}/scene`, {
+          canvas: { width: 512, height: 512, background: "#16292B" },
+          layers: newLayers,
+        });
+        setSaveStatus("saved");
+      } catch {
+        setSaveStatus("error");
+      }
+    }, 1000);
+  };
+
+  const fetchPendingInvitationsCount = async () => {
+    try {
+      const res = await api.get("/invitations");
+      setPendingInvitationsCount(res.data?.length || 0);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const initConversationAndProject = async () => {
+    try {
+      // 1. Load active project
+      const projRes = await api.get("/projects");
+      if (projRes.data && projRes.data.length > 0) {
+        const p = projRes.data[0];
+        setActiveProjectId(p.id);
+        setProjectName(p.name);
+        setCurrentUserRole(p.role || "OWNER");
+        loadProjectScene(p.id);
+      } else {
+        const newProj = await api.post("/projects", { name: "Creative Project" });
+        setActiveProjectId(newProj.data.id);
+        setProjectName(newProj.data.name);
+        setCurrentUserRole("OWNER");
+      }
+
+      // 2. Load active conversation
+      const convRes = await api.get("/conversations");
+      if (convRes.data && convRes.data.length > 0) {
+        setActiveConversationId(convRes.data[0].id);
+      } else {
+        const newConv = await api.post("/conversations", { title: "Creative Workspace" });
+        setActiveConversationId(newConv.data.id);
+      }
+
+      // 3. Fetch pending invitations
+      fetchPendingInvitationsCount();
+    } catch {
+      // Fallback
+    }
+  };
+
+  const handleRenameProject = async () => {
+    setIsEditingProjectName(false);
+    if (!projectName.trim()) return;
+    try {
+      if (activeProjectId) {
+        await api.patch(`/projects/${activeProjectId}`, { name: projectName.trim() });
+      } else {
+        const res = await api.post("/projects", { name: projectName.trim() });
+        setActiveProjectId(res.data.id);
+      }
+    } catch {
+      // Keep local state
+    }
+  };
+
+  const fetchAnalytics = async () => {
+    setIsLoadingAnalytics(true);
+    try {
+      const res = await api.get("/users/me/analytics");
+      setAnalyticsData(res.data);
+    } catch {
+      // Ignore
+    } finally {
+      setIsLoadingAnalytics(false);
+    }
+  };
 
   const checkWorkerHealth = async () => {
     try {
@@ -238,6 +373,8 @@ export const StudioWorkspace: React.FC = () => {
           cfg_scale: cfgScale,
           seed: seed ? parseInt(seed, 10) : undefined,
           num_images: 1,
+          conversation_id: activeConversationId || undefined,
+          project_id: activeProjectId || undefined,
         });
       } else {
         if (!sourceImageId) {
@@ -254,7 +391,17 @@ export const StudioWorkspace: React.FC = () => {
           steps,
           cfg_scale: cfgScale,
           seed: seed ? parseInt(seed, 10) : undefined,
+          conversation_id: activeConversationId || undefined,
+          project_id: activeProjectId || undefined,
         });
+      }
+
+      // Record prompt message in conversation history
+      if (activeConversationId) {
+        api.post(`/conversations/${activeConversationId}/messages`, {
+          role: "user",
+          content: prompt.trim(),
+        }).catch(() => { });
       }
 
       const jobId = res.data.job_id;
@@ -351,9 +498,9 @@ export const StudioWorkspace: React.FC = () => {
 
   const handleAddLayerFromActive = () => {
     if (!activeImageResult) return;
-    addLayer({
+    const newLayer = {
       id: `layer-${Date.now()}`,
-      type: "raster",
+      type: "raster" as const,
       name: `Output #${layers.length + 1}`,
       visible: true,
       locked: false,
@@ -361,8 +508,22 @@ export const StudioWorkspace: React.FC = () => {
       zIndex: layers.length,
       transform: { x: 0, y: 0, width: 512, height: 512, rotation: 0 },
       content: { url: activeImageResult.url },
-    });
+    };
+    addLayer(newLayer);
     setActiveTab("layers");
+    scheduleSaveScene([...layers, newLayer]);
+  };
+
+  const toggleLayerVisibility = (layerId: string, currentVisible: boolean) => {
+    const updated = layers.map((l) => (l.id === layerId ? { ...l, visible: !currentVisible } : l));
+    useCanvasStore.getState().updateLayer(layerId, { visible: !currentVisible });
+    scheduleSaveScene(updated);
+  };
+
+  const handleDeleteLayer = (layerId: string) => {
+    const updated = layers.filter((l) => l.id !== layerId);
+    useCanvasStore.getState().removeLayer(layerId);
+    scheduleSaveScene(updated);
   };
 
   // Determine Generate button state label
@@ -403,30 +564,53 @@ export const StudioWorkspace: React.FC = () => {
       {/* 1. TOP NAVIGATION BAR                                                  */}
       {/* ---------------------------------------------------------------------- */}
       <header className="h-14 border-b border-raven-700 bg-raven-900 px-4 flex items-center justify-between shrink-0 z-30">
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-4">
           <BrandLogo size="sm" />
 
-          {/* Workspace Project Name */}
-          <div className="hidden sm:flex items-center gap-2 pl-4 border-l border-raven-700">
-            {isEditingProjectName ? (
-              <input
-                type="text"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                onBlur={() => setIsEditingProjectName(false)}
-                onKeyDown={(e) => e.key === "Enter" && setIsEditingProjectName(false)}
-                autoFocus
-                className="bg-raven-950 border border-apricot-500 rounded px-2 py-0.5 text-xs text-seagrass-50 font-mono focus:outline-none"
-              />
-            ) : (
-              <button
-                onClick={() => setIsEditingProjectName(true)}
-                className="text-xs font-mono text-seagrass-300 hover:text-seagrass-50 transition-colors flex items-center gap-1.5"
-                title="Click to rename"
+          {/* Project Switcher & Name */}
+          <div className="flex items-center gap-2 pl-3 border-l border-raven-700">
+            <button
+              onClick={() => setProjectSwitcherOpen(true)}
+              className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-raven-850 hover:bg-raven-800 border border-raven-700 hover:border-seagrass-400/30 text-xs font-mono transition-colors"
+              title="Switch or manage projects"
+            >
+              <Folder className="w-3.5 h-3.5 text-apricot-500 shrink-0" />
+              <span className="font-semibold text-seagrass-50 max-w-[120px] sm:max-w-[180px] truncate">{projectName}</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[9px] font-mono uppercase font-semibold ${currentUserRole === "OWNER"
+                  ? "bg-apricot-500/15 text-apricot-400 border border-apricot-500/30"
+                  : currentUserRole === "EDITOR"
+                    ? "bg-semantic-success/15 text-semantic-success border border-semantic-success/30"
+                    : "bg-seagrass-400/15 text-seagrass-300 border border-seagrass-400/30"
+                  }`}
               >
-                <span>{projectName}</span>
-                <span className="text-[10px] text-seagrass-500 font-sans">(rename)</span>
-              </button>
+                {currentUserRole}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 text-seagrass-400" />
+            </button>
+
+            {/* Scene Save Status Indicator */}
+            {saveStatus !== "idle" && (
+              <div className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded bg-raven-950/80 border border-raven-800 text-[10px] font-mono text-seagrass-400">
+                {saveStatus === "saving" && (
+                  <>
+                    <div className="w-2.5 h-2.5 border border-apricot-500 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-apricot-400">Saving...</span>
+                  </>
+                )}
+                {saveStatus === "saved" && (
+                  <>
+                    <Check className="w-2.5 h-2.5 text-semantic-success" />
+                    <span className="text-seagrass-300">Saved</span>
+                  </>
+                )}
+                {saveStatus === "error" && (
+                  <>
+                    <AlertCircle className="w-2.5 h-2.5 text-semantic-error" />
+                    <span className="text-semantic-error">Save failed</span>
+                  </>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -467,10 +651,36 @@ export const StudioWorkspace: React.FC = () => {
           </div>
         </div>
 
-        {/* Right: Credits & User Controls */}
-        <div className="flex items-center gap-3">
+        {/* Right: Credits, Collaboration & User Controls */}
+        <div className="flex items-center gap-2.5">
+          {/* Share & Collaborate Button */}
+          {activeProjectId && (
+            <button
+              onClick={() => setShareModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-raven-850 hover:bg-raven-800 border border-raven-700 text-xs font-mono text-seagrass-200 transition-colors"
+              title="Share project & manage members"
+            >
+              <Share2 className="w-3.5 h-3.5 text-apricot-500" />
+              <span className="hidden md:inline">Share</span>
+            </button>
+          )}
+
+          {/* Notifications / Pending Invitations Bell */}
+          <button
+            onClick={() => setInvitationsModalOpen(true)}
+            className="relative w-8 h-8 rounded-lg bg-raven-850 hover:bg-raven-800 border border-raven-700 flex items-center justify-center text-seagrass-300 hover:text-seagrass-50 transition-colors"
+            title="Project invitations"
+          >
+            <Bell className="w-4 h-4" />
+            {pendingInvitationsCount > 0 && (
+              <span className="absolute -top-1 -right-1 px-1.5 py-0.2 rounded-full bg-apricot-500 text-raven-950 text-[9px] font-bold font-mono">
+                {pendingInvitationsCount}
+              </span>
+            )}
+          </button>
+
           {/* Credits remaining */}
-          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-lg bg-raven-850 border border-raven-700 text-xs font-mono">
+          <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-raven-850 border border-raven-700 text-xs font-mono">
             <span className="text-apricot-500 font-semibold">{user?.credits_remaining ?? 50}</span>
             <span className="text-seagrass-400">credits</span>
           </div>
@@ -492,6 +702,17 @@ export const StudioWorkspace: React.FC = () => {
                   <div className="text-seagrass-400 text-[11px] font-mono truncate">{user?.email || "creator@reve.ai"}</div>
                 </div>
                 <div className="py-1">
+                  <button
+                    onClick={() => {
+                      setAnalyticsOpen(true);
+                      setUserMenuOpen(false);
+                      fetchAnalytics();
+                    }}
+                    className="w-full text-left px-3 py-2 rounded-lg text-seagrass-300 hover:text-seagrass-50 hover:bg-raven-800 flex items-center gap-2"
+                  >
+                    <BarChart2 className="w-3.5 h-3.5 text-apricot-500" />
+                    <span>Workspace Analytics</span>
+                  </button>
                   <Link
                     to="/"
                     className="w-full text-left px-3 py-2 rounded-lg text-seagrass-300 hover:text-seagrass-50 hover:bg-raven-800 flex items-center gap-2"
@@ -526,23 +747,35 @@ export const StudioWorkspace: React.FC = () => {
         <aside className="w-14 bg-raven-900 border-r border-raven-700 flex flex-col items-center py-3 gap-2 shrink-0 z-20">
           <button
             onClick={() => setActiveTab("generate")}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-              activeTab === "generate"
-                ? "bg-apricot-500 text-raven-950 font-bold shadow-surface"
-                : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
-            }`}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${activeTab === "generate"
+              ? "bg-apricot-500 text-raven-950 font-bold shadow-surface"
+              : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
+              }`}
             title="Generate"
           >
             <Wand2 className="w-5 h-5" />
           </button>
 
           <button
-            onClick={() => setActiveTab("layers")}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all relative ${
-              activeTab === "layers"
-                ? "bg-apricot-500 text-raven-950 font-bold shadow-surface"
-                : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
-            }`}
+            onClick={() => setActiveTab(activeTab === "conversations" ? "generate" : "conversations")}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all relative ${activeTab === "conversations"
+              ? "bg-apricot-500 text-raven-950 font-bold shadow-surface"
+              : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
+              }`}
+            title="Conversations & Threads"
+          >
+            <MessageSquare className="w-5 h-5" />
+            {activeConversationId && (
+              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-apricot-500" />
+            )}
+          </button>
+
+          <button
+            onClick={() => setActiveTab(activeTab === "layers" ? "generate" : "layers")}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all relative ${activeTab === "layers"
+              ? "bg-apricot-500 text-raven-950 font-bold shadow-surface"
+              : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
+              }`}
             title="Layers"
           >
             <Layers className="w-5 h-5" />
@@ -552,12 +785,11 @@ export const StudioWorkspace: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setActiveTab("history")}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-              activeTab === "history"
-                ? "bg-apricot-500 text-raven-950 font-bold shadow-surface"
-                : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
-            }`}
+            onClick={() => setActiveTab(activeTab === "history" ? "generate" : "history")}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${activeTab === "history"
+              ? "bg-apricot-500 text-raven-950 font-bold shadow-surface"
+              : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
+              }`}
             title="Recent work"
           >
             <History className="w-5 h-5" />
@@ -568,11 +800,10 @@ export const StudioWorkspace: React.FC = () => {
           {/* Toggle Image Settings Drawer */}
           <button
             onClick={() => setSettingsOpen(!settingsOpen)}
-            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-              settingsOpen
-                ? "text-apricot-500 bg-raven-800 border border-apricot-500/30"
-                : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
-            }`}
+            className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${settingsOpen
+              ? "text-apricot-500 bg-raven-800 border border-apricot-500/30"
+              : "text-seagrass-400 hover:text-seagrass-50 hover:bg-raven-800"
+              }`}
             title="Image settings"
           >
             <Sliders className="w-5 h-5" />
@@ -647,9 +878,8 @@ export const StudioWorkspace: React.FC = () => {
             {activeImageResult ? (
               <div className="flex flex-col items-center justify-center max-w-full max-h-full">
                 <div
-                  className={`relative rounded-xl overflow-hidden border border-raven-700 bg-raven-900 shadow-modal transition-all ${
-                    zoomLevel === "fit" ? "max-h-[55vh] max-w-[55vw]" : "w-[512px] h-[512px]"
-                  }`}
+                  className={`relative rounded-xl overflow-hidden border border-raven-700 bg-raven-900 shadow-modal transition-all ${zoomLevel === "fit" ? "max-h-[55vh] max-w-[55vw]" : "w-[512px] h-[512px]"
+                    }`}
                 >
                   <img
                     src={activeImageResult.url}
@@ -1198,6 +1428,125 @@ export const StudioWorkspace: React.FC = () => {
                   </div>
                 ))
               )}
+            </div>
+          </div>
+        )}
+        {/* ------------------------------------------------------------------ */}
+        {/* WORKSPACE ANALYTICS MODAL                                           */}
+        {/* ------------------------------------------------------------------ */}
+        {analyticsOpen && (
+          <div className="fixed inset-0 bg-raven-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-raven-900 border border-raven-700 rounded-2xl max-w-xl w-full p-6 shadow-modal space-y-6 max-h-[90vh] overflow-y-auto">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-raven-800 pb-4">
+                <div className="flex items-center gap-2">
+                  <BarChart2 className="w-5 h-5 text-apricot-500" />
+                  <h3 className="font-semibold text-seagrass-50 text-base">Workspace Analytics</h3>
+                </div>
+                <button
+                  onClick={() => setAnalyticsOpen(false)}
+                  className="w-8 h-8 rounded-lg hover:bg-raven-800 flex items-center justify-center text-seagrass-400 hover:text-seagrass-100"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {isLoadingAnalytics ? (
+                <div className="py-12 text-center text-seagrass-400 text-xs font-mono animate-pulse">
+                  Loading metrics from database...
+                </div>
+              ) : analyticsData ? (
+                <div className="space-y-6 text-xs">
+                  {/* Account Summary Banner */}
+                  <div className="p-4 rounded-xl bg-raven-850 border border-raven-700 flex items-center justify-between">
+                    <div>
+                      <div className="text-seagrass-200 font-semibold">{analyticsData.email}</div>
+                      <div className="text-[11px] text-seagrass-400 font-mono">Plan: {analyticsData.plan_tier.toUpperCase()}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-apricot-500 font-bold font-mono text-base">{analyticsData.credits_remaining}</div>
+                      <div className="text-[10px] text-seagrass-400 font-mono">credits remaining</div>
+                    </div>
+                  </div>
+
+                  {/* 4 Metrics Cards Grid */}
+                  <div className="grid grid-cols-2 gap-3 font-mono">
+                    <div className="p-3.5 rounded-xl bg-raven-850 border border-raven-700 space-y-1">
+                      <span className="text-seagrass-400 text-[11px]">Generations</span>
+                      <div className="text-seagrass-50 text-lg font-bold">{analyticsData.total_generations}</div>
+                      <div className="text-[11px] text-semantic-success flex items-center gap-1">
+                        <span>✓ {analyticsData.successful_generations} succeeded</span>
+                      </div>
+                      {analyticsData.failed_generations > 0 && (
+                        <div className="text-[10px] text-semantic-error">
+                          ✗ {analyticsData.failed_generations} failed
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-raven-850 border border-raven-700 space-y-1">
+                      <span className="text-seagrass-400 text-[11px]">Credits Consumed</span>
+                      <div className="text-seagrass-50 text-lg font-bold">{analyticsData.total_credits_consumed}</div>
+                      <div className="text-[11px] text-seagrass-400">Total computed usage</div>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-raven-850 border border-raven-700 space-y-1">
+                      <span className="text-seagrass-400 text-[11px]">Projects</span>
+                      <div className="text-seagrass-50 text-lg font-bold">{analyticsData.total_projects}</div>
+                      <div className="text-[11px] text-seagrass-400">Active workspaces</div>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-raven-850 border border-raven-700 space-y-1">
+                      <span className="text-seagrass-400 text-[11px]">Conversations</span>
+                      <div className="text-seagrass-50 text-lg font-bold">{analyticsData.total_conversations}</div>
+                      <div className="text-[11px] text-seagrass-400">Creative threads</div>
+                    </div>
+                  </div>
+
+                  {/* Recent Activity Stream */}
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-semibold text-seagrass-200">Recent Creations</h4>
+                    {analyticsData.recent_activity.length === 0 ? (
+                      <div className="p-4 rounded-xl bg-raven-850/50 border border-raven-800 text-center text-seagrass-400 text-[11px]">
+                        No generations recorded yet in this workspace.
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                        {analyticsData.recent_activity.map((item: any) => (
+                          <div
+                            key={item.id}
+                            className="p-2.5 rounded-lg bg-raven-850 border border-raven-750 flex items-center justify-between text-xs"
+                          >
+                            <span className="text-seagrass-100 truncate max-w-[280px]" title={item.prompt}>
+                              {item.prompt}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium ${item.status === "COMPLETED"
+                                ? "bg-semantic-success/15 text-semantic-success"
+                                : item.status === "FAILED"
+                                  ? "bg-semantic-error/15 text-semantic-error"
+                                  : "bg-semantic-warning/15 text-semantic-warning"
+                                }`}
+                            >
+                              {item.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Close Button */}
+              <div className="pt-2 border-t border-raven-800 flex justify-end">
+                <button
+                  onClick={() => setAnalyticsOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-raven-800 hover:bg-raven-750 border border-raven-700 text-seagrass-100 text-xs font-medium transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         )}

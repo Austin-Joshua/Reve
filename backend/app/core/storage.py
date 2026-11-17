@@ -105,7 +105,7 @@ class StorageManager:
         """
         ext = "png" if "png" in mime_type.lower() else "jpg"
         unique_id = str(uuid.uuid4())
-        name = filename or f"{unique_id}.{ext}"
+        name = f"{unique_id}.{ext}"
         thumb_name = f"{unique_id}_thumb.{ext}"
 
         # Inspect dimensions

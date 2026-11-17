@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import (
-    String, Text, Integer, Float, Boolean, JSON, DateTime, ForeignKey
+    String, Text, Integer, Float, Boolean, JSON, DateTime, ForeignKey, UniqueConstraint
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base, TimestampMixin
@@ -24,6 +24,8 @@ class User(Base, TimestampMixin):
     generations: Mapped[List["Generation"]] = relationship("Generation", back_populates="user", cascade="all, delete-orphan")
     assets: Mapped[List["Asset"]] = relationship("Asset", back_populates="user", cascade="all, delete-orphan")
     references: Mapped[List["ImageReference"]] = relationship("ImageReference", back_populates="user", cascade="all, delete-orphan")
+    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
+    project_memberships: Mapped[List["ProjectMember"]] = relationship("ProjectMember", back_populates="user", cascade="all, delete-orphan")
 
 
 class Project(Base, TimestampMixin):
@@ -36,10 +38,14 @@ class Project(Base, TimestampMixin):
     canvas_width: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     canvas_height: Mapped[int] = mapped_column(Integer, default=1024, nullable=False)
     canvas_background: Mapped[str] = mapped_column(String(32), default="#0A0A0B", nullable=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     user: Mapped["User"] = relationship("User", back_populates="projects")
     scene_document: Mapped[Optional["SceneDocument"]] = relationship("SceneDocument", back_populates="project", uselist=False, cascade="all, delete-orphan")
     generations: Mapped[List["Generation"]] = relationship("Generation", back_populates="project", cascade="all, delete-orphan")
+    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="project")
+    members: Mapped[List["ProjectMember"]] = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
+    invitations: Mapped[List["ProjectInvitation"]] = relationship("ProjectInvitation", back_populates="project", cascade="all, delete-orphan")
 
 
 class SceneDocument(Base, TimestampMixin):
@@ -75,6 +81,7 @@ class Generation(Base, TimestampMixin):
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     project_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True)
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("conversations.id", ondelete="SET NULL"), index=True, nullable=True)
     generation_type: Mapped[str] = mapped_column(String(32), default="text_to_image", nullable=False)  # text_to_image, image_to_image, inpaint, outpaint
     source_image_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -91,6 +98,7 @@ class Generation(Base, TimestampMixin):
 
     user: Mapped["User"] = relationship("User", back_populates="generations")
     project: Mapped[Optional["Project"]] = relationship("Project", back_populates="generations")
+    conversation: Mapped[Optional["Conversation"]] = relationship("Conversation", back_populates="generations")
     images: Mapped[List["GeneratedImage"]] = relationship("GeneratedImage", back_populates="generation", cascade="all, delete-orphan")
     job: Mapped[Optional["GenerationJob"]] = relationship("GenerationJob", back_populates="generation", uselist=False, cascade="all, delete-orphan")
 
@@ -176,3 +184,62 @@ class UsageRecord(Base, TimestampMixin):
     operation: Mapped[str] = mapped_column(String(50), nullable=False)
     credits_consumed: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class Conversation(Base, TimestampMixin):
+    __tablename__ = "conversations"
+
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    project_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("projects.id", ondelete="SET NULL"), index=True, nullable=True)
+    title: Mapped[str] = mapped_column(String(255), default="New Conversation", nullable=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="conversations")
+    project: Mapped[Optional["Project"]] = relationship("Project", back_populates="conversations")
+    messages: Mapped[List["ConversationMessage"]] = relationship(
+        "ConversationMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ConversationMessage.created_at.asc()",
+    )
+    generations: Mapped[List["Generation"]] = relationship("Generation", back_populates="conversation")
+
+
+class ConversationMessage(Base, TimestampMixin):
+    __tablename__ = "conversation_messages"
+
+    conversation_id: Mapped[str] = mapped_column(String(36), ForeignKey("conversations.id", ondelete="CASCADE"), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="user", nullable=False)  # user, assistant, system
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    generation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("generations.id", ondelete="SET NULL"), index=True, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
+    generation: Mapped[Optional["Generation"]] = relationship("Generation")
+
+
+class ProjectMember(Base, TimestampMixin):
+    __tablename__ = "project_members"
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id", name="uq_project_user_member"),
+    )
+
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="EDITOR", nullable=False)  # OWNER, EDITOR, VIEWER
+
+    project: Mapped["Project"] = relationship("Project", back_populates="members")
+    user: Mapped["User"] = relationship("User", back_populates="project_memberships")
+
+
+class ProjectInvitation(Base, TimestampMixin):
+    __tablename__ = "project_invitations"
+
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id", ondelete="CASCADE"), index=True, nullable=False)
+    inviter_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    invitee_email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default="EDITOR", nullable=False)  # EDITOR, VIEWER
+    status: Mapped[str] = mapped_column(String(32), default="PENDING", nullable=False)  # PENDING, ACCEPTED, REJECTED, REVOKED
+
+    project: Mapped["Project"] = relationship("Project", back_populates="invitations")
+    inviter: Mapped["User"] = relationship("User")

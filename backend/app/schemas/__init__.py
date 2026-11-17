@@ -20,6 +20,19 @@ from app.schemas.generation import (
     GenerationJobResponse,
     GenerationResponse,
 )
+from app.schemas.conversation import (
+    ConversationCreateRequest,
+    ConversationUpdateRequest,
+    ConversationResponse,
+    ConversationDetailResponse,
+    MessageCreateRequest,
+    MessageResponse,
+)
+from app.schemas.user import (
+    UserProfileUpdateRequest,
+    UserAnalyticsResponse,
+    GenerationSummaryItem,
+)
 
 __all__ = [
     "HealthCheckResponse",
@@ -39,4 +52,13 @@ __all__ = [
     "OutpaintRequest",
     "GenerationJobResponse",
     "GenerationResponse",
+    "ConversationCreateRequest",
+    "ConversationUpdateRequest",
+    "ConversationResponse",
+    "ConversationDetailResponse",
+    "MessageCreateRequest",
+    "MessageResponse",
+    "UserProfileUpdateRequest",
+    "UserAnalyticsResponse",
+    "GenerationSummaryItem",
 ]

@@ -11,6 +11,10 @@ from app.models.entities import (
     EditOperation,
     ModelProvider,
     UsageRecord,
+    Conversation,
+    ConversationMessage,
+    ProjectMember,
+    ProjectInvitation,
 )
 
 __all__ = [
@@ -26,4 +30,8 @@ __all__ = [
     "EditOperation",
     "ModelProvider",
     "UsageRecord",
+    "Conversation",
+    "ConversationMessage",
+    "ProjectMember",
+    "ProjectInvitation",
 ]

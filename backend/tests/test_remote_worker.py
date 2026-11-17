@@ -366,3 +366,40 @@ async def test_credit_refund_idempotency(client: httpx.AsyncClient):
     assert cancel2.status_code == 400
     me3 = await client.get("/api/v1/auth/me", headers=user_headers)
     assert me3.json()["credits_remaining"] == 50
+
+
+@pytest.mark.asyncio
+async def test_completion_with_null_seed(client: httpx.AsyncClient):
+    """Assert fix B1: RemoteInferenceResponse accepts seed=None without 422 error."""
+    worker_headers = {"X-Worker-Token": settings.REVE_WORKER_SECRET_TOKEN}
+    provider = ProviderRegistry.get_provider("remote_worker")
+    from ai_engine.providers.remote_worker import RemoteInferenceRequest
+
+    job_id = "test_null_seed_job"
+    req = RemoteInferenceRequest(
+        job_id=job_id,
+        model_id="SD-1.5",
+        prompt="A misty mountain peak with unseeded noise",
+        width=512,
+        height=512,
+        seed=None,
+    )
+    provider.enqueue_job(req)
+
+    valid_b64 = create_png_base64(256, 256)
+    complete_resp = await client.post(
+        f"/api/v1/internal/worker/jobs/{job_id}/complete",
+        headers=worker_headers,
+        json={
+            "job_id": job_id,
+            "status": "SUCCESS",
+            "images_base64": [valid_b64],
+            "seed": None,  # Explicitly None
+            "model_id": "SD-1.5",
+            "execution_time_seconds": 2.5,
+        },
+    )
+    assert complete_resp.status_code == 200
+    assert complete_resp.json()["status"] == "received"
+    assert provider._job_status[job_id] == "COMPLETED"
+

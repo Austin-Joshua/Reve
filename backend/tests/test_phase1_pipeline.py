@@ -69,6 +69,24 @@ async def test_image_upload_validation(client: httpx.AsyncClient):
     assert meta_res.status_code == 200
     assert meta_res.json()["id"] == data["image_id"]
 
+    # 6. Assert fix B3: No filename collision on duplicate filenames
+    valid_png_2 = create_test_image_bytes(300, 300, "PNG")
+    upload_res_2 = await client.post(
+        "/api/v1/images/upload",
+        headers=headers,
+        files={"file": ("test_source.png", valid_png_2, "image/png")},  # exact same filename
+    )
+    assert upload_res_2.status_code == 201
+    data_2 = upload_res_2.json()
+    assert data_2["image_id"] != data["image_id"]
+    assert data_2["width"] == 300
+
+    # First image must still exist intact with original dimensions
+    meta_res_1 = await client.get(f"/api/v1/images/{data['image_id']}", headers=headers)
+    assert meta_res_1.status_code == 200
+    assert meta_res_1.json()["width"] == 256
+
+
 
 @pytest.mark.asyncio
 async def test_generation_request_validation(client: httpx.AsyncClient):

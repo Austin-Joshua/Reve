@@ -31,6 +31,9 @@ api.interceptors.response.use(
           });
           const newToken = res.data.access_token;
           localStorage.setItem("reve_access_token", newToken);
+          if (res.data.refresh_token) {
+            localStorage.setItem("reve_refresh_token", res.data.refresh_token);
+          }
           originalRequest.headers.Authorization = `Bearer ${newToken}`;
           return api(originalRequest);
         } catch (e) {

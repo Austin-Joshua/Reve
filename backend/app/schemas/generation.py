@@ -21,6 +21,7 @@ class TextToImageRequest(BaseModel):
     num_images: int = Field(default=1, ge=1, le=4)
     model_id: str = Field(default="FLUX.1-dev")
     project_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     enhance_prompt: bool = Field(default=False)
     reference_images: Optional[List[ReferenceImageInput]] = None
 
@@ -35,6 +36,7 @@ class ImageToImageRequest(BaseModel):
     steps: int = 28
     model_id: str = "FLUX.1-dev"
     project_id: Optional[str] = None
+    conversation_id: Optional[str] = None
 
 
 class InpaintRequest(BaseModel):
@@ -74,6 +76,7 @@ class GenerationResponse(BaseModel):
     id: str
     user_id: str
     project_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     generation_type: str
     prompt: str
     negative_prompt: Optional[str] = None

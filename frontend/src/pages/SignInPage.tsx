@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { BrandLogo } from "../components/common/BrandLogo";
 import { api } from "../services/api";
 import { useAuthStore } from "../stores/authStore";
@@ -14,6 +14,7 @@ export const SignInPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
 
   const navigate = useNavigate();
+  const location = useLocation();
   const { fetchUser } = useAuthStore();
 
   const handleSignIn = async (e: React.FormEvent) => {
@@ -36,7 +37,8 @@ export const SignInPage: React.FC = () => {
       }
 
       await fetchUser();
-      navigate("/studio");
+      const origin = (location.state as any)?.from?.pathname || "/studio";
+      navigate(origin);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       const message =

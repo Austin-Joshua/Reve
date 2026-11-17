@@ -6,6 +6,9 @@ from app.api.v1.generations import router as generations_router
 from app.api.v1.models import router as models_router
 from app.api.v1.images import router as images_router
 from app.api.v1.internal_worker import router as internal_worker_router
+from app.api.v1.conversations import router as conversations_router
+from app.api.v1.users import router as users_router
+from app.api.v1.invitations import router as invitations_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(health_router)
@@ -15,5 +18,8 @@ api_v1_router.include_router(generations_router)
 api_v1_router.include_router(models_router)
 api_v1_router.include_router(images_router)
 api_v1_router.include_router(internal_worker_router)
+api_v1_router.include_router(conversations_router)
+api_v1_router.include_router(users_router)
+api_v1_router.include_router(invitations_router)
 
 __all__ = ["api_v1_router"]
